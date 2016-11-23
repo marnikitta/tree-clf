@@ -1,6 +1,8 @@
 #include <stdlib.h>
 #include <inttypes.h>
-typedef struct {
+#include <stdbool.h>
+
+typedef struct _treeNode {
   int64_t featureId;
   double threshold;
   struct _treeNode *leftChild;
@@ -8,6 +10,7 @@ typedef struct {
   size_t positiveCount;
   size_t count;
   double gini;
+  bool isActive;
 } TreeClfNode;
 
 typedef struct {
