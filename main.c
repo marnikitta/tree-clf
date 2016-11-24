@@ -14,18 +14,18 @@ int main() {
 
   FILE * const fp = fopen("./train_X.tsv", "r");
   fscanf(fp, "%zu %zu", &height, &width);
+
   double **X = allocDoubleMatrix(width, height); //store columwise
   int8_t *y = (int8_t *)calloc(height, sizeof(int8_t));
 
   double tmp;
-
   for (size_t i = 0; i < height; ++i) {
     for (size_t j = 0; j < width + 1; ++j) {
       if (j == width) {
         fscanf(fp, "%lf", &tmp);
         y[i] = (int8_t) tmp;
       } else {
-        fscanf(fp, "%lf", &X[j][i]);
+        fscanf(fp, "%lf", X[j] + i);
       }
     }
   }
@@ -37,6 +37,10 @@ int main() {
   timer("start");
   TreeClfNode *root = fit(X, y, height, width, params);
   timer("stop");
+
+  free(y);
+  free(X[0]);
+  free(X);
   return 0;
 }
 

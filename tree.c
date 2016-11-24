@@ -5,9 +5,11 @@
 #include <stdbool.h>
 #include <math.h>
 #include <assert.h>
-
 #include <stdio.h>
 #include <time.h>
+#include <pthread.h>
+
+#define THREADS 4
 
 
 typedef struct {
@@ -62,18 +64,32 @@ void debug(CARTClf clf, LearnNode *nodes) {
   fflush(stdout);
 }
 
+typedef struct {
+  const CARTClf *clf;
+  size_t leftFeatureId;
+  size_t rightFeatureId;
+  LearnNode *result;
+  LearnNode *tmpLeafs;
+  pthread_barrier_t *barrier;
+} WrapperArgs;
+
 SortingEntry **argsort(const double **array, size_t height, size_t width);
 
 SortingEntry **allocSortingMatrix(size_t height, size_t width);
 
 LearnNode *allocBuffer(size_t size);
 
+LearnNode **allocBuffers(size_t height, size_t width);
+
+void *wrapper(void *args);
+
 void iterateForFeature(
         const CARTClf *clf,
         size_t leftFeatureId,
         size_t rightFeatureId,
         LearnNode *result,
-        LearnNode *tmpLeafs
+        LearnNode *tmpLeafs,
+        pthread_barrier_t *barrier
 );
 
 void updateNode(LearnNode *root, size_t leafId, int8_t cls);
@@ -87,6 +103,8 @@ void copyStats(LearnNode *toRoot, LearnNode *fromRoot, size_t leafId);
 void updateLeafLiveliness(CARTClf *clf);
 
 void updateLeafIds(CARTClf *clf);
+
+void collectResults(CARTClf *clf, LearnNode **threadResults);
 
 CARTClf init(const double **X, const int8_t *y, size_t height, size_t width, TreeClfParams *params) {
   CARTClf clf;
@@ -124,29 +142,92 @@ CARTClf init(const double **X, const int8_t *y, size_t height, size_t width, Tre
 TreeClfNode *fit(const double **XByColumn, const int8_t *y, size_t height, size_t width, TreeClfParams params) {
   CARTClf clf = init(XByColumn, y, height, width, &params);
 
-  //###
+  LearnNode **buffers = allocBuffers(THREADS, clf.maxNodes);
+  LearnNode **threadResults = allocBuffers(THREADS, clf.maxNodes);
 
-  LearnNode *result = allocBuffer(clf.maxNodes);
-  LearnNode *tmpLeafs = allocBuffer(clf.maxNodes);
-
+  pthread_t threads[THREADS];
+  int rc = 0;
+  long status;
 
   int depth = 1;
   while (clf.aliveCount > 0 && depth++ < clf.params->maxDepth) {
+    WrapperArgs args[THREADS];
+    pthread_barrier_t barrier;
+    pthread_barrier_init(&barrier, NULL, THREADS);
+
     clf.end = initChildLeaves(clf.nodes, clf.end);
-    memcpy(result, clf.nodes, clf.end * sizeof(LearnNode));
 
-    iterateForFeature(&clf, 0, width, result, tmpLeafs);
+    for (size_t t = 0; t < THREADS; ++t) {
+      memcpy(threadResults[t], clf.nodes, clf.end * sizeof(LearnNode));
 
-    memcpy(clf.nodes, result, clf.end * sizeof(LearnNode));
+      args[t].clf = &clf;
+      args[t].leftFeatureId = t * width / THREADS;
+      args[t].rightFeatureId = (t + 1) * width / THREADS;
+      args[t].result = threadResults[t];
+      args[t].tmpLeafs = buffers[t];
+      args[t].barrier = &barrier;
+
+      //wrapper((void *)&args);
+      rc = pthread_create(threads + t, NULL, &wrapper, args + t);
+      if (rc) {
+        exit(-1);
+      }
+
+    }
+
+    for (size_t t = 0; t < THREADS; ++t) {
+      pthread_join(threads[t], &status);
+    }
+
+    collectResults(&clf, threadResults);
 
     updateLeafIds(&clf);
     updateLeafLiveliness(&clf);
+    //printf("%d %zu\n", depth, clf.aliveCount);
   }
 
-  //###
+  TreeClfNode *result = (TreeClfNode *) calloc(clf.end, sizeof(TreeClfNode));
+  for (size_t i = 0; i < clf.end; ++i) {
+    result[i].count = clf.nodes[i].count;
+    result[i].positiveCount = clf.nodes[i].positiveCount;
+    result[i].threshold = clf.nodes[i].threshold;
+    result[i].featureId = clf.nodes[i].featureId;
+    if (clf.nodes[i].leftChild != 0) {
+      result[i].leftChild = result + clf.nodes[i].leftChild;
+      result[i].rightChild = result + clf.nodes[i].rightChild;
+    } else {
+      result[i].leftChild = NULL;
+      result[i].rightChild = NULL;
+    }
+  }
 
-  return NULL;
+  //time to gather stones...
+  free(clf.nodes);
+  free(clf.leafs);
+  free(clf.featureSort[0]);
+  free(clf.featureSort);
+  free(threadResults[0]);
+  free(buffers[0]);
+  free(threadResults);
+  free(buffers);
+
+  return result;
 };
+
+void collectResults(CARTClf *clf, LearnNode **threadResults) {
+  LearnNode *leaf, *tmpLeaf;
+  for (size_t i = 0; i < clf->end; ++i) {
+    leaf = clf->nodes + i;
+    if (leaf->isAlive) {
+      for (size_t t = 0; t < THREADS; ++t) {
+        tmpLeaf = threadResults[t] + i;
+        if (tmpLeaf->gini < leaf->gini) {
+          copyStats(clf->nodes, threadResults[t], i);
+        }
+      }
+    }
+  }
+}
 
 void updateLeafLiveliness(CARTClf *clf) {
   LearnNode *leaf;
@@ -193,6 +274,12 @@ void updateLeafIds(CARTClf *clf) {
   }
 }
 
+void *wrapper(void *args) {
+  WrapperArgs *wArgs = (WrapperArgs *)args;
+  iterateForFeature(wArgs->clf, wArgs->leftFeatureId, wArgs->rightFeatureId, wArgs->result, wArgs->tmpLeafs, wArgs->barrier);
+  return NULL;
+}
+
 /**
 * [leftFeatureId, rightFeatureId)
 * Height of buffers should be gte rightFeatureId - leftFeatureId
@@ -203,7 +290,8 @@ void iterateForFeature(
         size_t leftFeatureId,
         size_t rightFeatureId,
         LearnNode *result,
-        LearnNode *tmpLeafs
+        LearnNode *tmpLeafs,
+        pthread_barrier_t *barrier
 ) {
 
   size_t index;
@@ -304,11 +392,22 @@ void updateNode(LearnNode *root, size_t leafId, int8_t cls) {
 
 }
 
-void predict(const double *const *XByColumn, size_t depth, int64_t *result) {
+void predict(const TreeClfNode *root, const double **XByColumn, size_t depth, int8_t *result) {
 };
 
 LearnNode *allocBuffer(size_t size) {
   return (LearnNode *) calloc(size, sizeof(LearnNode));
+}
+
+LearnNode **allocBuffers(size_t height, size_t width) {
+  LearnNode *tmp = (LearnNode *) calloc(height * width, sizeof(LearnNode));
+  LearnNode **result = (LearnNode **) calloc(height, sizeof(LearnNode *));
+  for (size_t i = 0; i < height; ++i) {
+    result[i] = tmp + i * width;
+  }
+
+  return result;
+
 }
 
 int _sortingEntryComp(const void *arg1, const void *arg2) {

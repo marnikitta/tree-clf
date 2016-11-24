@@ -1,21 +1,19 @@
 CC=gcc
 
-CFLAG=-c -Wall -std=c99
+CFLAG=-c -D_GNU_SOURCE -Wall -std=c99 -pthread
+LFLAG=-pthread
 
 #all: target target/main
 all: target target/main
 
 target/main: target/main.o target/tree.o
-	$(CC) target/main.o target/tree.o -o target/main
+	$(CC) $(LFLAG) target/main.o target/tree.o -o target/main
 
 target/main.o: main.c tree.h
 	$(CC) $(CFLAG) main.c -o target/main.o
 
 target/tree.o: tree.c tree.h
 	$(CC) $(CFLAG) tree.c -o target/tree.o
-
-pt: pth-test.c
-	$(CC) -pthread pth-test.c -o target/pt
 
 target:
 	mkdir -p target
