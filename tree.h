@@ -25,7 +25,7 @@ typedef struct {
 
 #ifndef TREE_H
 #define TREE_H
-TreeClfNode *fit(double ** XByColumn, const int8_t *y, size_t height, size_t widht, TreeClfParams params);
+TreeClfNode *fit(const double ** XByColumn, const int8_t *y, size_t height, size_t widht, TreeClfParams params);
 
 void predict (const double * const *XByColumn, size_t depth, int64_t *result);
 #endif

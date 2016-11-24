@@ -9,9 +9,10 @@
 #include <stdio.h>
 #include <time.h>
 
+
 typedef struct {
   size_t position;
-  double *value;
+  const double *value;
 } SortingEntry;
 
 typedef struct {
@@ -22,7 +23,7 @@ typedef struct {
   size_t positiveCount;
   size_t count;
   double gini;
-  bool isAlive;
+  int8_t isAlive;
 } LearnNode;
 
 typedef struct {
@@ -32,21 +33,43 @@ typedef struct {
   size_t maxNodes;
   SortingEntry **featureSort;
   const int8_t *y;
+  const double **X;
   size_t height;
   size_t width;
   size_t *leafs;
   size_t aliveCount;
-  bool *isAlive;
 } CARTClf;
 
-SortingEntry **argsort(double **array, size_t height, size_t width);
+void debug(CARTClf clf, LearnNode *nodes) {
+  for (size_t j = 0; j < clf.end; ++j) {
+    printf("isAlive[%zu] = %d ", j, nodes[j].isAlive);
+    printf("gini = %lf ", nodes[j].gini);
+    printf("count = %zu ", nodes[j].count);
+    printf("positive count = %zu ", nodes[j].positiveCount);
+    printf("featureId = %zu ", nodes[j].featureId);
+    printf("threshold = %lf ", nodes[j].threshold);
+    printf("left = %zu ", nodes[j].leftChild);
+    printf("right = %zu ", nodes[j].rightChild);
+    int tmpCnt = 0;
+    for (size_t m = 0; m < clf.height; ++m) {
+      if (clf.leafs[m] == j) {
+        tmpCnt++;
+      }
+    }
+    printf("leaf = %d \n", tmpCnt);
+  }
+  printf("###\n");
+  fflush(stdout);
+}
+
+SortingEntry **argsort(const double **array, size_t height, size_t width);
 
 SortingEntry **allocSortingMatrix(size_t height, size_t width);
 
 LearnNode *allocBuffer(size_t size);
 
 void iterateForFeature(
-        const CARTClf *self,
+        const CARTClf *clf,
         size_t leftFeatureId,
         size_t rightFeatureId,
         LearnNode *result,
@@ -61,51 +84,114 @@ size_t initChildLeaves(LearnNode *nodes, size_t end);
 
 void copyStats(LearnNode *toRoot, LearnNode *fromRoot, size_t leafId);
 
-TreeClfNode *fit(double **XByColumn, const int8_t *y, size_t height, size_t width, TreeClfParams params) {
+void updateLeafLiveliness(CARTClf *clf);
+
+void updateLeafIds(CARTClf *clf);
+
+CARTClf init(const double **X, const int8_t *y, size_t height, size_t width, TreeClfParams *params) {
   CARTClf clf;
 
-  clf.maxNodes = height * 2 + 1;
+  clf.params = params;
+  clf.maxNodes = height * 4 + 1;
   timer("Before sort");
-  clf.featureSort = argsort(XByColumn, width, height);
+  clf.featureSort = argsort(X, width, height);
   timer("After sort");
   clf.nodes = allocBuffer(clf.maxNodes);
   clf.end = 0;
-  clf.aliveCount = 0;
+  clf.aliveCount = 1;
   clf.leafs = (size_t *) calloc(height, sizeof(size_t));
   clf.height = height;
   clf.width = width;
   clf.y = y;
+  clf.X = X;
 
   LearnNode *root = clf.nodes + clf.end;
   clf.end++;
 
-  root->isAlive = true;
+  root->isAlive = 1;
   root->count = height;
 
   for (size_t i = 0; i < height; ++i) {
     if (y[i] == 1) {
       root->positiveCount += 1;
     }
-  }
 
-  for (size_t i = 0; i < height; ++i) {
     clf.leafs[i] = 0;
   }
+  return clf;
+}
 
-  clf.end = initChildLeaves(clf.nodes, clf.end);
+TreeClfNode *fit(const double **XByColumn, const int8_t *y, size_t height, size_t width, TreeClfParams params) {
+  CARTClf clf = init(XByColumn, y, height, width, &params);
+
+  //###
 
   LearnNode *result = allocBuffer(clf.maxNodes);
-  memcpy(result, clf.nodes, clf.end * sizeof(LearnNode)); // optimaze
-
   LearnNode *tmpLeafs = allocBuffer(clf.maxNodes);
 
-  timer("Before iterate");
-  iterateForFeature(&clf, 0, width, result, tmpLeafs);
 
-  printf("%zu %lf\n", result[0].featureId, result[0].threshold);
+  int depth = 1;
+  while (clf.aliveCount > 0 && depth++ < clf.params->maxDepth) {
+    clf.end = initChildLeaves(clf.nodes, clf.end);
+    memcpy(result, clf.nodes, clf.end * sizeof(LearnNode));
+
+    iterateForFeature(&clf, 0, width, result, tmpLeafs);
+
+    memcpy(clf.nodes, result, clf.end * sizeof(LearnNode));
+
+    updateLeafIds(&clf);
+    updateLeafLiveliness(&clf);
+  }
+
+  //###
 
   return NULL;
 };
+
+void updateLeafLiveliness(CARTClf *clf) {
+  LearnNode *leaf;
+  LearnNode *leftChild, *rightChild;
+  clf->aliveCount = 0;
+  for (size_t i = 0; i < clf->end; ++i) {
+    leaf = clf->nodes + i;
+    if (leaf->isAlive == 1) {
+      leaf->isAlive = 0;
+      leftChild = clf->nodes + leaf->leftChild;
+      rightChild = clf->nodes + leaf->rightChild;
+
+      if (leftChild->count > clf->params->minSamplesLeaf) {
+        clf->aliveCount++;
+        leftChild->isAlive = 2;
+      }
+      if (rightChild->count > clf->params->minSamplesLeaf) {
+        clf->aliveCount++;
+        rightChild->isAlive = 2;
+      }
+    }
+  }
+
+  for (size_t i = 0; i < clf->end; ++i) {
+    leaf = clf->nodes + i;
+    if (leaf->isAlive == 2) {
+      leaf->isAlive = 1;
+    }
+  }
+}
+
+void updateLeafIds(CARTClf *clf) {
+  LearnNode *leaf;
+
+  for (size_t i = 0; i < clf->height; ++i) {
+    leaf = clf->nodes + clf->leafs[i];
+    if (leaf->isAlive) {
+      if (clf->X[leaf->featureId][i] < leaf->threshold) {
+        clf->leafs[i] = leaf->leftChild;
+      } else {
+        clf->leafs[i] = leaf->rightChild;
+      }
+    }
+  }
+}
 
 /**
 * [leftFeatureId, rightFeatureId)
@@ -113,7 +199,7 @@ TreeClfNode *fit(double **XByColumn, const int8_t *y, size_t height, size_t widt
 * Buffers should be initialized with relevant statistics for previous layer
 */
 void iterateForFeature(
-        const CARTClf *self,
+        const CARTClf *clf,
         size_t leftFeatureId,
         size_t rightFeatureId,
         LearnNode *result,
@@ -127,32 +213,32 @@ void iterateForFeature(
   LearnNode *resultLeaf;
   double gini;
 
-  for (size_t i = leftFeatureId; i < rightFeatureId; ++i) {
-    memcpy(tmpLeafs, self->nodes, self->end * sizeof(LearnNode));
+  for (size_t featureId = leftFeatureId; featureId < rightFeatureId; ++featureId) {
+    memcpy(tmpLeafs, clf->nodes, clf->end * sizeof(LearnNode));
 
-    for (size_t count = 0; count < self->height; ++count) {
-      index = self->featureSort[i][count].position;
-      leafId = self->leafs[index];
+    for (size_t elementId = 0; elementId < clf->height; ++elementId) {
+      index = clf->featureSort[featureId][elementId].position;
+      leafId = clf->leafs[index];
 
-      assert(leafId >= 0 && leafId < self->maxNodes);
+      assert(leafId >= 0 && leafId < clf->maxNodes);
 
-      tmpLeaf = tmpLeafs + leafId;
 
-      if (self->nodes->isAlive) {
-        value = *(self->featureSort[i][count].value);
-
+      if ((clf->nodes + leafId)->isAlive) {
+        value = *(clf->featureSort[featureId][elementId].value);
         if (isnan(prevValue) || prevValue != value) {
+          tmpLeaf = tmpLeafs + leafId;
           gini = weightedGini(tmpLeafs, leafId);
 
           resultLeaf = result + leafId;
-          if (gini < resultLeaf->gini) {
-            tmpLeaf->featureId = i;
+          if (!isnan(gini) && gini < resultLeaf->gini) {
+            tmpLeaf->featureId = featureId;
             tmpLeaf->threshold = value;
             tmpLeaf->gini = gini;
             copyStats(result, tmpLeafs, leafId);
           }
         }
-        updateNode(tmpLeaf, leafId, self->y[index]);
+
+        updateNode(tmpLeafs, leafId, clf->y[index]);
         prevValue = value;
       }
     }
@@ -215,6 +301,7 @@ void updateNode(LearnNode *root, size_t leafId, int8_t cls) {
 
   rightChild->count--;
   rightChild->positiveCount -= cls;
+
 }
 
 void predict(const double *const *XByColumn, size_t depth, int64_t *result) {
@@ -236,7 +323,7 @@ int _sortingEntryComp(const void *arg1, const void *arg2) {
   }
 }
 
-SortingEntry **argsort(double **array, size_t height, size_t width) {
+SortingEntry **argsort(const double **array, size_t height, size_t width) {
   SortingEntry **result = allocSortingMatrix(height, width);
 
   for (size_t i = 0; i < height; ++i) {
