@@ -2,6 +2,10 @@
 #include <inttypes.h>
 #include <stdbool.h>
 
+#ifndef timer
+#define timer(msg) printf("%s %ld\n", msg, clock())
+#endif
+
 typedef struct _treeNode {
   int64_t featureId;
   double threshold;

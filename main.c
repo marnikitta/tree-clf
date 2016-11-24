@@ -1,10 +1,11 @@
 #include "tree.h"
 #include <stdio.h>
+#include <time.h>
 #include <stdbool.h>
+#include <time.h>
 #include <stdlib.h>
 #include <inttypes.h>
 
-int_fast32_t *allocVector(const size_t size);
 double **allocDoubleMatrix(size_t height, size_t width);
 
 int main() {
@@ -13,7 +14,7 @@ int main() {
 
   FILE * const fp = fopen("./train_X.tsv", "r");
   fscanf(fp, "%zu %zu", &height, &width);
-  double **X = (double **)allocDoubleMatrix(width, height); //store columwise
+  double **X = allocDoubleMatrix(width, height); //store columwise
   int8_t *y = (int8_t *)calloc(height, sizeof(int8_t));
 
   double tmp;
@@ -22,7 +23,7 @@ int main() {
     for (size_t j = 0; j < width + 1; ++j) {
       if (j == width) {
         fscanf(fp, "%lf", &tmp);
-        y[i] = tmp;
+        y[i] = (int8_t) tmp;
       } else {
         fscanf(fp, "%lf", &X[j][i]);
       }
@@ -32,7 +33,10 @@ int main() {
   fclose(fp);
 
   TreeClfParams params = {2, 1, 5};
+
+  timer("start");
   TreeClfNode *root = fit(X, y, height, width, params);
+  timer("stop");
   return 0;
 }
 

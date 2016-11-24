@@ -7,6 +7,7 @@
 #include <assert.h>
 
 #include <stdio.h>
+#include <time.h>
 
 typedef struct {
   size_t position;
@@ -14,7 +15,7 @@ typedef struct {
 } SortingEntry;
 
 typedef struct {
-  int64_t featureId;
+  size_t featureId;
   double threshold;
   size_t leftChild;
   size_t rightChild;
@@ -25,16 +26,17 @@ typedef struct {
 } LearnNode;
 
 typedef struct {
-  TreeClfParams *params,
-  LearnNode *nodes,
-  size_t end,
-  size_t maxNodes
-  SortingEntry **featureSort,
-  const int8_t *y,
-  size_t height,
-  size_t *leafs,
-  size_t aliveCount,
-  bool *isAlive
+  TreeClfParams *params;
+  LearnNode *nodes;
+  size_t end;
+  size_t maxNodes;
+  SortingEntry **featureSort;
+  const int8_t *y;
+  size_t height;
+  size_t width;
+  size_t *leafs;
+  size_t aliveCount;
+  bool *isAlive;
 } CARTClf;
 
 SortingEntry **argsort(double **array, size_t height, size_t width);
@@ -43,12 +45,12 @@ SortingEntry **allocSortingMatrix(size_t height, size_t width);
 
 LearnNode *allocBuffer(size_t size);
 
-void iterateForFeature (
-  const CARTClf *clf
-  size_t leftFeatureId, 
-  size_t rightFeatureId, 
-  LearnNode *result,
-  LearnNode *tmpLeafs,
+void iterateForFeature(
+        const CARTClf *self,
+        size_t leftFeatureId,
+        size_t rightFeatureId,
+        LearnNode *result,
+        LearnNode *tmpLeafs
 );
 
 void updateNode(LearnNode *root, size_t leafId, int8_t cls);
@@ -59,17 +61,19 @@ size_t initChildLeaves(LearnNode *nodes, size_t end);
 
 void copyStats(LearnNode *toRoot, LearnNode *fromRoot, size_t leafId);
 
-TreeClfNode *fit (double **XByColumn, const int8_t *y, size_t height, size_t width, TreeClfParams params) {
+TreeClfNode *fit(double **XByColumn, const int8_t *y, size_t height, size_t width, TreeClfParams params) {
   CARTClf clf;
 
   clf.maxNodes = height * 2 + 1;
+  timer("Before sort");
   clf.featureSort = argsort(XByColumn, width, height);
-  clf.nodes = allocBuffer(maxNodes);
+  timer("After sort");
+  clf.nodes = allocBuffer(clf.maxNodes);
   clf.end = 0;
   clf.aliveCount = 0;
-  clf.leafs = (size_t *)calloc(height, sizeof(size_t));
+  clf.leafs = (size_t *) calloc(height, sizeof(size_t));
   clf.height = height;
-  clf.widht = width;
+  clf.width = width;
   clf.y = y;
 
   LearnNode *root = clf.nodes + clf.end;
@@ -90,13 +94,15 @@ TreeClfNode *fit (double **XByColumn, const int8_t *y, size_t height, size_t wid
 
   clf.end = initChildLeaves(clf.nodes, clf.end);
 
-  LearnNode *result = allocBuffer(maxNodes);
-  memcpy(result, nodes, end * sizeof(LearnNode)); // optimaze
+  LearnNode *result = allocBuffer(clf.maxNodes);
+  memcpy(result, clf.nodes, clf.end * sizeof(LearnNode)); // optimaze
 
-  LearnNode *tmpLeafs = allocBuffer(maxNodes);
-  iterateForFeature(0, width, nodes, result, tmpLeafs, featureSort, y, height, leafs, maxNodes);
+  LearnNode *tmpLeafs = allocBuffer(clf.maxNodes);
 
-  printf("%zu %lf", result[0].featureId, result[0].threshold);
+  timer("Before iterate");
+  iterateForFeature(&clf, 0, width, result, tmpLeafs);
+
+  printf("%zu %lf\n", result[0].featureId, result[0].threshold);
 
   return NULL;
 };
@@ -106,12 +112,12 @@ TreeClfNode *fit (double **XByColumn, const int8_t *y, size_t height, size_t wid
 * Height of buffers should be gte rightFeatureId - leftFeatureId
 * Buffers should be initialized with relevant statistics for previous layer
 */
-void iterateForFeature (
-  const CARTClf *clf
-  size_t leftFeatureId, 
-  size_t rightFeatureId, 
-  LearnNode *result,
-  LearnNode *tmpLeafs,
+void iterateForFeature(
+        const CARTClf *self,
+        size_t leftFeatureId,
+        size_t rightFeatureId,
+        LearnNode *result,
+        LearnNode *tmpLeafs
 ) {
 
   size_t index;
@@ -122,27 +128,31 @@ void iterateForFeature (
   double gini;
 
   for (size_t i = leftFeatureId; i < rightFeatureId; ++i) {
-    memcpy(memLeafs, )
-    for (size_t count = 0; count < height; ++count) {
-      index = featureSort[i][count].position;
-      leafId = leafs[index];
+    memcpy(tmpLeafs, self->nodes, self->end * sizeof(LearnNode));
 
-      assert(leafId >= 0 && leafId < height * 2);
+    for (size_t count = 0; count < self->height; ++count) {
+      index = self->featureSort[i][count].position;
+      leafId = self->leafs[index];
+
+      assert(leafId >= 0 && leafId < self->maxNodes);
 
       tmpLeaf = tmpLeafs + leafId;
-      resultLeaf = result + leafId;
 
-      if (resultLeaf->isActive) {
-        value = *featureSort[i][count].value;
+      if (self->nodes->isAlive) {
+        value = *(self->featureSort[i][count].value);
 
         if (isnan(prevValue) || prevValue != value) {
           gini = weightedGini(tmpLeafs, leafId);
+
+          resultLeaf = result + leafId;
           if (gini < resultLeaf->gini) {
+            tmpLeaf->featureId = i;
+            tmpLeaf->threshold = value;
+            tmpLeaf->gini = gini;
             copyStats(result, tmpLeafs, leafId);
-            printf("%lf\n", gini);
           }
         }
-        updateNode(tmpLeaf, leafId, y[index]);
+        updateNode(tmpLeaf, leafId, self->y[index]);
         prevValue = value;
       }
     }
@@ -152,46 +162,31 @@ void iterateForFeature (
 void copyStats(LearnNode *toRoot, LearnNode *fromRoot, size_t leafId) {
   const LearnNode *fromLeaf = fromRoot + leafId;
   const LearnNode *fromLeft = fromRoot + fromLeaf->leftChild;
-
-  size_t leftCount = fromLeft->count;
-  size_t rightCount = fromLeaf->count - leftCount;
-  size_t leftPositive = fromLeft->positiveCount;
-  size_t rightPositive = fromLeaf->count - leftPositive;
+  const LearnNode *fromRight = fromRoot + fromLeaf->rightChild;
 
   LearnNode *toLeaf = toRoot + leafId;
+  LearnNode *toLeft = toRoot + toLeaf->leftChild;
   LearnNode *toRight = toRoot + toLeaf->rightChild;
-  LearnNode *toLeft = toRoot + toLeaf->leftChild;
-
-  toLeaf->threshold = fromLeaf->threshold;
-  toLeaf->featureId = fromLeaf->featureId;
-  toLeaf->gini = fromLeaf->gini;
-//  *toLeaf = *fromLeaf;
-
-  toLeft->count = leftCount;
-  toLeft->positiveCount = leftPositive;
-  toRight->count = rightCount;
-  toRight->positiveCount = rightPositive;
-}
-
-void copyLeftStats(LearnNode *toRoot, LearnNode *fromRoot, size_t leafId) {
-  const LearnNode *fromLeaf = fromRoot + leafId;
-  const LearnNode *fromLeft = fromRoot + fromLeaf->leftChild;
-
-  LearnNode *toLeaf = toRoot + leafId;
-  LearnNode *toLeft = toRoot + toLeaf->leftChild;
 
   *toLeaf = *fromLeaf;
   *toLeft = *fromLeft;
+  *toRight = *fromRight;
 }
 
 size_t initChildLeaves(LearnNode *nodes, size_t end) {
+  LearnNode *rightChild;
+
   size_t newEnd = end;
   for (size_t i = 0; i < end; ++i) {
     LearnNode *leaf = nodes + i;
-    if (leaf->isActive) {
+    if (leaf->isAlive) {
       leaf->gini = INFINITY;
       leaf->leftChild = newEnd++;
       leaf->rightChild = newEnd++;
+
+      rightChild = nodes + leaf->rightChild;
+      rightChild->positiveCount = leaf->positiveCount;
+      rightChild->count = leaf->count;
     }
   }
   return newEnd;
@@ -200,33 +195,38 @@ size_t initChildLeaves(LearnNode *nodes, size_t end) {
 double weightedGini(const LearnNode *root, size_t leafId) {
   const LearnNode *leaf = root + leafId;
   const LearnNode *leftChild = root + leaf->leftChild;
-  size_t leftCount = leftChild->count;
-  size_t rightCount = leaf->count - leftCount;
-  size_t leftPositive = leftChild->positiveCount;
-  size_t rightPositive = leaf->count - leftPositive;
-  double leftP = (double)leftPositive / leftCount;
-  double rightP = (double) rightPositive / rightCount;
-  return leftCount * leftP * (1 - leftP) + rightCount * rightP * (1 - rightP);
+  const LearnNode *rightChild = root + leaf->rightChild;
+
+  assert(leftChild->count + rightChild->count == leaf->count);
+  assert(leftChild->positiveCount + rightChild->positiveCount == leaf->positiveCount);
+
+  double leftP = (double) leftChild->positiveCount / leftChild->count;
+  double rightP = (double) rightChild->positiveCount / rightChild->count;
+  return leftChild->count * leftP * (1 - leftP) + rightChild->count * rightP * (1 - rightP);
 }
 
 void updateNode(LearnNode *root, size_t leafId, int8_t cls) {
   const LearnNode *leaf = root + leafId;
   LearnNode *leftChild = root + leaf->leftChild;
+  LearnNode *rightChild = root + leaf->rightChild;
 
   leftChild->count++;
   leftChild->positiveCount += cls;
+
+  rightChild->count--;
+  rightChild->positiveCount -= cls;
 }
 
-void predict(const double * const *XByColumn, size_t depth, int64_t *result) {
+void predict(const double *const *XByColumn, size_t depth, int64_t *result) {
 };
 
 LearnNode *allocBuffer(size_t size) {
-  return (LearnNode *)calloc(size, sizeof(LearnNode));
+  return (LearnNode *) calloc(size, sizeof(LearnNode));
 }
 
 int _sortingEntryComp(const void *arg1, const void *arg2) {
-  SortingEntry *e1 = (SortingEntry *)arg1;
-  SortingEntry *e2 = (SortingEntry *)arg2;
+  SortingEntry *e1 = (SortingEntry *) arg1;
+  SortingEntry *e2 = (SortingEntry *) arg2;
   if (*(e1->value) < *(e2->value)) {
     return -1;
   } else if (*(e1->value) == *(e2->value)) {
@@ -237,7 +237,7 @@ int _sortingEntryComp(const void *arg1, const void *arg2) {
 }
 
 SortingEntry **argsort(double **array, size_t height, size_t width) {
-  SortingEntry **result = (SortingEntry **)allocSortingMatrix(height, width);
+  SortingEntry **result = allocSortingMatrix(height, width);
 
   for (size_t i = 0; i < height; ++i) {
     for (size_t j = 0; j < width; ++j) {
@@ -254,11 +254,11 @@ SortingEntry **argsort(double **array, size_t height, size_t width) {
 }
 
 SortingEntry **allocSortingMatrix(size_t height, size_t width) {
-  SortingEntry *tmp = (SortingEntry *)calloc(height * width, sizeof(SortingEntry));
-  SortingEntry **result = (SortingEntry **)calloc(height, sizeof(SortingEntry *));
+  SortingEntry *tmp = (SortingEntry *) calloc(height * width, sizeof(SortingEntry));
+  SortingEntry **result = (SortingEntry **) calloc(height, sizeof(SortingEntry *));
   for (size_t i = 0; i < height; ++i) {
     result[i] = tmp + i * width;
   }
-  
+
   return result;
 }
