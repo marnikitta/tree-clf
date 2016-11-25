@@ -1,6 +1,6 @@
 CC=gcc
 
-CFLAG=-c -D_GNU_SOURCE -Wall -std=c99 -pthread
+CFLAG=-c -O2 -D_GNU_SOURCE -Wall -std=c99 -pthread
 LFLAG=-pthread
 
 #all: target target/main

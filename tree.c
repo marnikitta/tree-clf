@@ -1,13 +1,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
-#include "tree.h"
 #include <stdbool.h>
 #include <math.h>
 #include <assert.h>
 #include <stdio.h>
 #include <time.h>
 #include <pthread.h>
+#include "tree.h"
 
 #define THREADS 4
 
@@ -41,28 +41,6 @@ typedef struct {
   size_t *leafs;
   size_t aliveCount;
 } CARTClf;
-
-void debug(CARTClf clf, LearnNode *nodes) {
-  for (size_t j = 0; j < clf.end; ++j) {
-    printf("isAlive[%zu] = %d ", j, nodes[j].isAlive);
-    printf("gini = %lf ", nodes[j].gini);
-    printf("count = %zu ", nodes[j].count);
-    printf("positive count = %zu ", nodes[j].positiveCount);
-    printf("featureId = %zu ", nodes[j].featureId);
-    printf("threshold = %lf ", nodes[j].threshold);
-    printf("left = %zu ", nodes[j].leftChild);
-    printf("right = %zu ", nodes[j].rightChild);
-    int tmpCnt = 0;
-    for (size_t m = 0; m < clf.height; ++m) {
-      if (clf.leafs[m] == j) {
-        tmpCnt++;
-      }
-    }
-    printf("leaf = %d \n", tmpCnt);
-  }
-  printf("###\n");
-  fflush(stdout);
-}
 
 typedef struct {
   const CARTClf *clf;
@@ -207,8 +185,8 @@ TreeClfNode *fit(const double **XByColumn, const int8_t *y, size_t height, size_
   free(clf.featureSort[0]);
   free(clf.featureSort);
   free(threadResults[0]);
-  free(buffers[0]);
   free(threadResults);
+  free(buffers[0]);
   free(buffers);
 
   return result;

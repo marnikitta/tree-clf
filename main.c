@@ -32,7 +32,7 @@ int main() {
 
   fclose(fp);
 
-  TreeClfParams params = {2, 1, 5};
+  TreeClfParams params = {2, 1, 100};
 
   timer("start");
   TreeClfNode *root = fit(X, y, height, width, params);
